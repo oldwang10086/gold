@@ -10,12 +10,11 @@ from sklearn.metrics import r2_score
 from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import PolynomialFeatures
 
-st.set_page_config(page_title="多资产隐含降息监控", layout="wide")
+st.set_page_config(page_title="多资产隐含降息次数与资产价格对照", layout="wide")
 
 START_DATE = "2015-10-01"
-DATA_DIR = Path("d:/pyproject/黄金隐含降息次数")
-if not DATA_DIR.exists():
-    DATA_DIR = (Path.cwd() / "黄金隐含降息次数").resolve()
+BASE_DIR = Path(__file__).resolve().parent
+DATA_DIR = BASE_DIR / "data"
 
 ASSET_CONFIG = {
     "GOLD": {"label": "黄金(现货)", "type": "yfinance", "ticker": "GC=F"},
