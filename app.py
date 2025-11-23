@@ -1,4 +1,5 @@
 import matplotlib.dates as mdates
+import matplotlib.font_manager as fm
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
@@ -6,6 +7,7 @@ import streamlit as st
 import yfinance as yf
 from matplotlib.lines import Line2D
 from pathlib import Path
+from urllib.request import urlretrieve
 from typing import Dict, Tuple
 
 from sklearn.linear_model import LinearRegression
@@ -13,7 +15,6 @@ from sklearn.metrics import r2_score
 from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import PolynomialFeatures
 
-plt.rcParams["font.sans-serif"] = ["SimHei", "Microsoft YaHei", "DejaVu Sans", "Arial Unicode MS", "sans-serif"]
 plt.rcParams["axes.unicode_minus"] = False
 plt.rcParams["font.size"] = 9
 plt.rcParams["figure.dpi"] = 100
@@ -25,6 +26,7 @@ st.set_page_config(page_title="多资产隐含降息次数与资产价格对照"
 START_DATE = "2015-10-01"
 BASE_DIR = Path(__file__).resolve().parent
 DATA_DIR = BASE_DIR / "data"
+FONTS_DIR = BASE_DIR / "fonts"
 
 ASSET_CONFIG = {
     "GOLD": {"label": "黄金(现货)", "type": "yfinance", "ticker": "GC=F"},
@@ -47,6 +49,31 @@ def select_single_file(pattern: str) -> Path:
     if not matches:
         raise FileNotFoundError(f"未找到匹配 {pattern} 的文件")
     return matches[0]
+
+
+def ensure_cn_font():
+    """
+    确保 Matplotlib 有可用的中文字体，并同步到 rcParams。
+    优先使用本地 fonts 目录下的 NotoSansSC-Regular.otf，不存在时自动下载一次。
+    """
+    FONTS_DIR.mkdir(parents=True, exist_ok=True)
+    target = FONTS_DIR / "NotoSansSC-Regular.otf"
+    if not target.exists():
+        url = (
+            "https://github.com/googlefonts/noto-cjk/raw/main/Sans/OTF/"
+            "SimplifiedChinese/NotoSansSC-Regular.otf"
+        )
+        urlretrieve(url, target)
+    fm.fontManager.addfont(str(target))
+    plt.rcParams["font.family"] = "Noto Sans SC"
+    plt.rcParams["font.sans-serif"] = [
+        "Noto Sans SC",
+        "Microsoft YaHei",
+        "SimHei",
+        "PingFang SC",
+        "Arial Unicode MS",
+        "sans-serif",
+    ]
 
 
 @st.cache_data(show_spinner=False)
@@ -416,6 +443,7 @@ def plot_sample_windows(samples, asset_daily):
 def compute_daily_samples(asset_prices: Dict[str, pd.Series], zq: pd.DataFrame):
     if not asset_prices or zq.empty or "implied_rate" not in zq:
         return pd.DataFrame(), None
+    ensure_cn_font()
 
     rate_series = zq["implied_rate"].dropna().rename("implied_rate")
     if rate_series.empty:
@@ -520,6 +548,17 @@ def compute_daily_samples(asset_prices: Dict[str, pd.Series], zq: pd.DataFrame):
 def main():
     st.title("多资产隐含降息次数与日度拟合结果")
     st.caption("数据来源：Yahoo Finance / FOMC 决议文件，支持 `streamlit run app.py --server.address 0.0.0.0` 远程访问。")
+    ensure_cn_font()
+    st.markdown(
+        """
+        <style>
+        html, body, [class*="css"] {
+            font-family: "Noto Sans SC","Microsoft YaHei","PingFang SC","SimHei",sans-serif;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
 
     with st.spinner("加载数据并计算模型…"):
         meeting_base, asset_prices, zq = load_reference_data()
