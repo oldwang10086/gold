@@ -56,17 +56,7 @@ def ensure_cn_font():
     确保 Matplotlib 有可用的中文字体，并同步到 rcParams。
     优先使用本地 fonts 目录下的 NotoSansSC-Regular.otf，不存在时自动下载一次。
     """
-    FONTS_DIR.mkdir(parents=True, exist_ok=True)
-    target = FONTS_DIR / "NotoSansSC-Regular.otf"
-    if not target.exists():
-        url = (
-            "https://github.com/googlefonts/noto-cjk/raw/main/Sans/OTF/"
-            "SimplifiedChinese/NotoSansSC-Regular.otf"
-        )
-        urlretrieve(url, target)
-    fm.fontManager.addfont(str(target))
-    plt.rcParams["font.family"] = "Noto Sans SC"
-    plt.rcParams["font.sans-serif"] = [
+    font_candidates = [
         "Noto Sans SC",
         "Microsoft YaHei",
         "SimHei",
@@ -74,6 +64,22 @@ def ensure_cn_font():
         "Arial Unicode MS",
         "sans-serif",
     ]
+    try:
+        FONTS_DIR.mkdir(parents=True, exist_ok=True)
+        target = FONTS_DIR / "NotoSansSC-Regular.otf"
+        if not target.exists():
+            url = (
+                "https://github.com/googlefonts/noto-cjk/raw/main/Sans/OTF/"
+                "SimplifiedChinese/NotoSansSC-Regular.otf"
+            )
+            urlretrieve(url, target)
+        fm.fontManager.addfont(str(target))
+        font_candidates.insert(0, "Noto Sans SC")
+    except Exception:
+        # 无网络或下载失败时，直接使用系统可用字体，避免中断。
+        pass
+    plt.rcParams["font.family"] = font_candidates[0]
+    plt.rcParams["font.sans-serif"] = font_candidates
 
 
 @st.cache_data(show_spinner=False)
