@@ -1,7 +1,10 @@
+import matplotlib.dates as mdates
+import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import streamlit as st
 import yfinance as yf
+from matplotlib.lines import Line2D
 from pathlib import Path
 from typing import Dict, Tuple
 
@@ -9,6 +12,13 @@ from sklearn.linear_model import LinearRegression
 from sklearn.metrics import r2_score
 from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import PolynomialFeatures
+
+plt.rcParams["font.sans-serif"] = ["SimHei", "Microsoft YaHei", "DejaVu Sans", "Arial Unicode MS", "sans-serif"]
+plt.rcParams["axes.unicode_minus"] = False
+plt.rcParams["font.size"] = 9
+plt.rcParams["figure.dpi"] = 100
+
+LEGEND_BAD = "|拟合-期货| > 70%"
 
 st.set_page_config(page_title="多资产隐含降息次数与资产价格对照", layout="wide")
 
@@ -351,6 +361,162 @@ def compute_daily_fit_summary(asset_prices: Dict[str, pd.Series], zq: pd.DataFra
     return pd.DataFrame(rows)
 
 
+def plot_sample_windows(samples, asset_daily):
+    n = len(samples)
+    ncols = 5
+    nrows = int(np.ceil(n / ncols))
+    fig, axes = plt.subplots(nrows, ncols, figsize=(5 * ncols, 4 * nrows), sharey=False)
+    axes = np.atleast_1d(axes).ravel()
+    for ax in axes[n:]:
+        ax.axis("off")
+
+    for i, row in enumerate(samples):
+        ax = axes[i]
+        info = asset_daily.get(row["asset_key"])
+        if info is None:
+            ax.axis("off")
+            continue
+        series_obj = info["series"]
+        dt = pd.Timestamp(row["日期"])
+        window = series_obj.loc[dt - pd.Timedelta(days=10) : dt + pd.Timedelta(days=10)]
+        if window.empty:
+            ax.axis("off")
+            continue
+        color = "green" if row["偏差是否在70%内"] == "是" else "red"
+        ax.plot(window.index, window.values, color=color, alpha=0.75)
+        if dt in window.index:
+            ax.scatter([dt], [window.loc[dt]], color="black", marker="o", zorder=5, s=30)
+            ax.axvline(dt, color="gray", linestyle="--", alpha=0.4)
+
+        ax.xaxis.set_major_locator(mdates.DayLocator(interval=5))
+        ax.xaxis.set_major_formatter(mdates.DateFormatter("%m-%d"))
+        plt.setp(ax.xaxis.get_majorticklabels(), rotation=45, ha="right")
+
+        if color == "green":
+            legend_label = "|拟合-期货| <= 70%"
+        else:
+            fit_val = f"{row['拟合隐含利率']:.3f}"
+            fut_val = f"{row['期货隐含利率']:.3f}"
+            legend_label = f"{LEGEND_BAD} ({fit_val}-{fut_val})"
+        handles = [
+            Line2D([0], [0], color=color, lw=2, label=legend_label),
+            Line2D([0], [0], color="black", marker="o", linestyle="", label="样本点"),
+        ]
+        ax.legend(handles=handles, fontsize=7, loc="upper right")
+        ax.set_title(f"{row['资产']} {dt.date()}", fontsize=9)
+        ax.set_xlabel("日期")
+        ax.set_ylabel("价格")
+        ax.grid(True, alpha=0.3)
+
+    fig.subplots_adjust(wspace=0.3, hspace=0.5)
+    fig.tight_layout()
+    return fig
+
+
+def compute_daily_samples(asset_prices: Dict[str, pd.Series], zq: pd.DataFrame):
+    if not asset_prices or zq.empty or "implied_rate" not in zq:
+        return pd.DataFrame(), None
+
+    rate_series = zq["implied_rate"].dropna().rename("implied_rate")
+    if rate_series.empty:
+        return pd.DataFrame(), None
+
+    rng = np.random.default_rng(42)
+    asset_daily = {}
+    for key, cfg in ASSET_CONFIG.items():
+        if key == "DXY":
+            continue
+        price_series = asset_prices.get(key)
+        if price_series is None:
+            continue
+        series_obj = price_series.iloc[:, 0] if isinstance(price_series, pd.DataFrame) else price_series
+        series_obj = series_obj.dropna()
+        if series_obj.empty:
+            continue
+        df_daily = pd.concat(
+            [rate_series, series_obj.rename("price")],
+            axis=1,
+            join="inner",
+        ).dropna()
+        df_daily = df_daily.loc[df_daily["price"] > 0]
+        if df_daily.empty:
+            continue
+        X = df_daily[["implied_rate"]].values
+        y = np.log(df_daily["price"].values)
+        model = make_pipeline(PolynomialFeatures(degree=3, include_bias=False), LinearRegression())
+        model.fit(X, y)
+        lr_step = model.named_steps["linearregression"]
+        asset_daily[key] = {
+            "label": cfg["label"],
+            "df": df_daily,
+            "coef": lr_step.coef_,
+            "intercept": float(lr_step.intercept_),
+            "series": series_obj,
+        }
+
+    if not asset_daily:
+        return pd.DataFrame(), None
+
+    years = sorted(rate_series.index.year.unique())
+    chosen_dates = []
+    for year in years:
+        year_dates = rate_series.index[rate_series.index.year == year]
+        if year_dates.empty:
+            continue
+        dt = pd.Timestamp(rng.choice(year_dates))
+        chosen_dates.append(dt)
+        if len(chosen_dates) >= 10:
+            break
+
+    samples = []
+    for dt in chosen_dates:
+        for key, info in asset_daily.items():
+            df_daily = info["df"]
+            if dt not in df_daily.index:
+                continue
+            futures_rate = float(df_daily.loc[dt, "implied_rate"])
+            price_today = float(df_daily.loc[dt, "price"])
+            log_target = np.log(price_today)
+            coef = info["coef"]
+            intercept = info["intercept"]
+            poly_coeffs = np.array([coef[2], coef[1], coef[0], intercept - log_target], dtype=float)
+            coeffs_trimmed = np.trim_zeros(poly_coeffs, trim="f")
+            implied_rate_fit = np.nan
+            if coeffs_trimmed.size >= 2:
+                roots = np.roots(coeffs_trimmed)
+                real_roots = [root.real for root in roots if abs(root.imag) < 1e-6]
+                ref_rate = float(df_daily["implied_rate"].iloc[-1])
+                if real_roots:
+                    implied_rate_fit = min(real_roots, key=lambda r: abs(r - ref_rate))
+                else:
+                    implied_rate_fit = min(roots, key=lambda r: abs(r.imag)).real
+            if np.isnan(implied_rate_fit):
+                continue
+            threshold = 0.7 * abs(futures_rate)
+            within_band = abs(implied_rate_fit - futures_rate) <= threshold
+            samples.append(
+                {
+                    "asset_key": key,
+                    "资产": info["label"],
+                    "日期": dt,
+                    "价格": price_today,
+                    "拟合隐含利率": float(implied_rate_fit),
+                    "期货隐含利率": futures_rate,
+                    "偏差是否在70%内": "是" if within_band else "否",
+                }
+            )
+
+    if not samples:
+        return pd.DataFrame(), None
+
+    if len(samples) > 50:
+        samples = samples[:50]
+
+    sampled_df = pd.DataFrame(samples)
+    fig = plot_sample_windows(samples, asset_daily)
+    return sampled_df, fig
+
+
 def main():
     st.title("多资产隐含降息次数与日度拟合结果")
     st.caption("数据来源：Yahoo Finance / FOMC 决议文件，支持 `streamlit run app.py --server.address 0.0.0.0` 远程访问。")
@@ -373,6 +539,14 @@ def main():
         st.info("暂无可显示的日度拟合结果。")
     else:
         st.dataframe(daily_fit_summary, use_container_width=True)
+
+    st.subheader("日度抽样走势与拟合偏差")
+    sampled_df, sampled_fig = compute_daily_samples(asset_prices, zq)
+    if sampled_df.empty or sampled_fig is None:
+        st.info("缺少资产价格数据或抽样结果，无法绘制。")
+    else:
+        st.dataframe(sampled_df.drop(columns=["asset_key"]), use_container_width=True)
+        st.pyplot(sampled_fig, clear_figure=True)
 
 
 if __name__ == "__main__":
