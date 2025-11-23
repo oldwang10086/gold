@@ -19,7 +19,7 @@ plt.rcParams["axes.unicode_minus"] = False
 plt.rcParams["font.size"] = 9
 plt.rcParams["figure.dpi"] = 100
 
-LEGEND_BAD = "|拟合-期货| > 70%"
+LEGEND_BAD = "|fit - futures| > 70%"
 
 st.set_page_config(page_title="多资产隐含降息次数与资产价格对照", layout="wide")
 
@@ -35,6 +35,15 @@ ASSET_CONFIG = {
     "UST10Y": {"label": "美国10Y国债收益率", "type": "yfinance", "ticker": "^TNX"},
     "DXY": {"label": "美元指数", "type": "yfinance", "ticker": "DX-Y.NYB"},
     "USDCNY": {"label": "美元兑人民币", "type": "yfinance", "ticker": "USDCNY=X"},
+}
+
+ASSET_LABEL_EN = {
+    "GOLD": "Gold (Spot)",
+    "SP500": "S&P 500 Index",
+    "UST3M": "US 3M Treasury Yield",
+    "UST10Y": "US 10Y Treasury Yield",
+    "DXY": "US Dollar Index",
+    "USDCNY": "USD/CNY",
 }
 
 CANDIDATES = {
@@ -426,19 +435,20 @@ def plot_sample_windows(samples, asset_daily):
         plt.setp(ax.xaxis.get_majorticklabels(), rotation=45, ha="right")
 
         if color == "green":
-            legend_label = "|拟合-期货| <= 70%"
+            legend_label = "|fit - futures| <= 70%"
         else:
             fit_val = f"{row['拟合隐含利率']:.3f}"
             fut_val = f"{row['期货隐含利率']:.3f}"
             legend_label = f"{LEGEND_BAD} ({fit_val}-{fut_val})"
         handles = [
             Line2D([0], [0], color=color, lw=2, label=legend_label),
-            Line2D([0], [0], color="black", marker="o", linestyle="", label="样本点"),
+            Line2D([0], [0], color="black", marker="o", linestyle="", label="Sample point"),
         ]
         ax.legend(handles=handles, fontsize=7, loc="upper right")
-        ax.set_title(f"{row['资产']} {dt.date()}", fontsize=9)
-        ax.set_xlabel("日期")
-        ax.set_ylabel("价格")
+        asset_name = row.get("asset_label_en") or row["资产"]
+        ax.set_title(f"{asset_name} {dt.date()}", fontsize=9)
+        ax.set_xlabel("Date")
+        ax.set_ylabel("Price")
         ax.grid(True, alpha=0.3)
 
     fig.subplots_adjust(wspace=0.3, hspace=0.5)
@@ -482,6 +492,7 @@ def compute_daily_samples(asset_prices: Dict[str, pd.Series], zq: pd.DataFrame):
         lr_step = model.named_steps["linearregression"]
         asset_daily[key] = {
             "label": cfg["label"],
+            "label_en": ASSET_LABEL_EN.get(key, cfg["label"]),
             "df": df_daily,
             "coef": lr_step.coef_,
             "intercept": float(lr_step.intercept_),
@@ -532,6 +543,7 @@ def compute_daily_samples(asset_prices: Dict[str, pd.Series], zq: pd.DataFrame):
                 {
                     "asset_key": key,
                     "资产": info["label"],
+                    "asset_label_en": info.get("label_en", info["label"]),
                     "日期": dt,
                     "价格": price_today,
                     "拟合隐含利率": float(implied_rate_fit),
