@@ -342,6 +342,35 @@ def scale_cubic_summary(cubic_summary_df: pd.DataFrame) -> pd.DataFrame:
     return scaled_df
 
 
+def compute_implied_cuts_daily(meeting_base: pd.DataFrame, zq: pd.DataFrame) -> pd.DataFrame:
+    if meeting_base.empty or zq.empty or "implied_rate" not in zq:
+        return pd.DataFrame()
+    implied_rate = zq["implied_rate"].dropna()
+    if implied_rate.empty:
+        return pd.DataFrame()
+    actual_rate_steps = meeting_base[["meeting_date", "actual_rate_post"]].dropna()
+    if actual_rate_steps.empty:
+        return pd.DataFrame()
+    actual_rate_series = pd.Series(
+        actual_rate_steps["actual_rate_post"].values,
+        index=pd.to_datetime(actual_rate_steps["meeting_date"]),
+    ).sort_index()
+    actual_rate_daily = actual_rate_series.reindex(implied_rate.index, method="ffill")
+    if actual_rate_daily.isna().all():
+        actual_rate_daily = actual_rate_daily.fillna(method="bfill")
+    combined = pd.concat(
+        [
+            implied_rate.rename("implied_rate"),
+            actual_rate_daily.rename("actual_rate"),
+        ],
+        axis=1,
+    ).dropna()
+    if combined.empty:
+        return pd.DataFrame()
+    combined["implied_cuts"] = (combined["implied_rate"] - combined["actual_rate"]) / 0.25
+    return combined
+
+
 def compute_daily_fit_summary(asset_prices: Dict[str, pd.Series], zq: pd.DataFrame) -> pd.DataFrame:
     rate_series = zq["implied_rate"].dropna()
     if rate_series.empty:
@@ -563,48 +592,65 @@ def compute_daily_samples(asset_prices: Dict[str, pd.Series], zq: pd.DataFrame):
     return sampled_df, fig
 
 
+
+
+
 def main():
     st.title("多资产隐含降息次数与日度拟合结果")
-    st.caption("数据来源：Yahoo Finance / FOMC 决议文件，支持 `streamlit run app.py --server.address 0.0.0.0` 远程访问。")
+    st.caption("数据来源：Yahoo Finance / FOMC 决议文件，支持 `streamlit run app.py --server.address 0.0.0.0` 远程访问")
     ensure_cn_font()
     st.markdown(
-        """
+        '''
         <style>
-        html, body, [class*="css"] {
-            font-family: "Noto Sans SC","Microsoft YaHei","PingFang SC","SimHei",sans-serif;
+        html, body, [class*='css'] {
+            font-family: 'Noto Sans SC','Microsoft YaHei','PingFang SC','SimHei',sans-serif;
         }
         </style>
-        """,
+        ''',
         unsafe_allow_html=True,
     )
 
-    with st.spinner("加载数据并计算模型…"):
+    with st.spinner("加载数据并计算模型中..."):
         meeting_base, asset_prices, zq = load_reference_data()
         asset_results = analyze_assets(meeting_base, asset_prices)
         cubic_summary_df = compute_cubic_summary(asset_results, meeting_base, zq)
         scaled_cubic_df = scale_cubic_summary(cubic_summary_df)
         daily_fit_summary = compute_daily_fit_summary(asset_prices, zq)
+        implied_cuts_daily = compute_implied_cuts_daily(meeting_base, zq)
+
+    st.subheader("隐含降息次数柱状图（可调窗口）")
+    lookback_days = st.slider(
+        "选择回溯天数（默认一年）", min_value=90, max_value=720, value=365, step=30, help="选择回溯天数（默认一年）"
+    )
+    if implied_cuts_daily.empty:
+        st.info("缺少计算隐含降息次数所需的数据")
+    else:
+        cutoff = implied_cuts_daily.index.max() - pd.Timedelta(days=lookback_days)
+        recent_cuts = implied_cuts_daily.loc[implied_cuts_daily.index >= cutoff]
+        if recent_cuts.empty:
+            st.info("所选窗口内暂无数据")
+        else:
+            st.bar_chart(recent_cuts["implied_cuts"].rename("隐含降息次数"))
 
     st.subheader("缩放后隐含降息次数（负=降息，正=加息）")
     if scaled_cubic_df.empty:
-        st.info("暂无可显示的 cubic 汇总结果。")
+        st.info("暂无可显示的 cubic 汇总结果")
     else:
         st.dataframe(scaled_cubic_df, use_container_width=True)
 
     st.subheader("日度隐含利率拟合概览（Cubic 最优）")
     if daily_fit_summary.empty:
-        st.info("暂无可显示的日度拟合结果。")
+        st.info("暂无可显示的日度拟合结果")
     else:
         st.dataframe(daily_fit_summary, use_container_width=True)
 
     st.subheader("日度抽样走势与拟合偏差")
     sampled_df, sampled_fig = compute_daily_samples(asset_prices, zq)
     if sampled_df.empty or sampled_fig is None:
-        st.info("缺少资产价格数据或抽样结果，无法绘制。")
+        st.info("缺少资产价格数据或抽样结果，无法绘制")
     else:
-        st.dataframe(sampled_df.drop(columns=["asset_key"]), use_container_width=True)
+        st.dataframe(sampled_df.drop(columns=['asset_key']), use_container_width=True)
         st.pyplot(sampled_fig, clear_figure=True)
-
 
 if __name__ == "__main__":
     main()
