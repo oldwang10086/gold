@@ -85,7 +85,6 @@ def ensure_cn_font():
         fm.fontManager.addfont(str(target))
         font_candidates.insert(0, "Noto Sans SC")
     except Exception:
-        # 无网络或下载失败时，直接使用系统可用字体，避免中断。
         pass
     plt.rcParams["font.family"] = font_candidates[0]
     plt.rcParams["font.sans-serif"] = font_candidates
@@ -367,6 +366,8 @@ def compute_implied_cuts_daily(meeting_base: pd.DataFrame, zq: pd.DataFrame) -> 
     ).dropna()
     if combined.empty:
         return pd.DataFrame()
+    combined = combined.sort_index()
+    combined = combined.asfreq("D").ffill()
     combined["implied_cuts"] = (combined["implied_rate"] - combined["actual_rate"]) / 0.25
     return combined
 
@@ -619,13 +620,21 @@ def main():
         implied_cuts_daily = compute_implied_cuts_daily(meeting_base, zq)
 
     st.subheader("隐含降息次数柱状图（可调窗口）")
-    lookback_days = st.slider(
-        "选择回溯天数（默认一年）", min_value=90, max_value=720, value=365, step=30, help="选择回溯天数（默认一年）"
-    )
     if implied_cuts_daily.empty:
         st.info("缺少计算隐含降息次数所需的数据")
     else:
-        cutoff = implied_cuts_daily.index.max() - pd.Timedelta(days=lookback_days)
+        implied_cuts_daily = implied_cuts_daily.sort_index()
+        span_days = int((implied_cuts_daily.index.max() - implied_cuts_daily.index.min()).days) + 1
+        default_days = 365 if span_days >= 365 else span_days
+        lookback_days = st.slider(
+            "选择回溯天数（默认一年）",
+            min_value=30 if span_days >= 30 else 1,
+            max_value=span_days,
+            value=default_days,
+            step=1,
+            help="按日度坐标展示，拖动选择窗口长度",
+        )
+        cutoff = implied_cuts_daily.index.max() - pd.Timedelta(days=lookback_days - 1)
         recent_cuts = implied_cuts_daily.loc[implied_cuts_daily.index >= cutoff]
         if recent_cuts.empty:
             st.info("所选窗口内暂无数据")
